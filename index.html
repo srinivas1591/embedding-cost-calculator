@@ -41,10 +41,19 @@
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
     line-height: 1.5;
   }
-  .wrap { max-width: 980px; margin: 0 auto; }
+  .wrap { max-width: 1080px; margin: 0 auto; }
   h1 { font-size: 1.6rem; margin-bottom: 0.25rem; }
   .subtitle { color: var(--muted); font-size: 0.95rem; margin-bottom: 2rem; }
-  h2 { font-size: 1.15rem; margin-top: 2.5rem; margin-bottom: 0.75rem; }
+  h2 { font-size: 1.15rem; margin-top: 2.5rem; margin-bottom: 0.25rem; }
+  .step-label {
+    display: inline-block;
+    font-size: 0.72rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--accent);
+    margin-bottom: 0.35rem;
+  }
   .card {
     background: var(--card);
     border: 1px solid var(--border);
@@ -62,7 +71,7 @@
     font-weight: 600;
     margin-bottom: 0.4rem;
   }
-  input[type=number] {
+  input[type=number], select {
     width: 100%;
     padding: 0.55rem 0.7rem;
     border-radius: 6px;
@@ -112,6 +121,7 @@
     background: var(--border);
   }
   .status-legacy { color: var(--legacy); font-size: 0.78rem; }
+  .status-preview { color: var(--legacy); font-size: 0.78rem; }
   .status-eol { color: var(--eol); font-size: 0.78rem; }
   .status-current { color: var(--muted); font-size: 0.78rem; }
   .cheapest { position: relative; }
@@ -125,6 +135,26 @@
     font-size: 0.82rem;
     color: var(--muted);
     margin-top: 0.75rem;
+  }
+  .combined-card {
+    display: grid;
+    grid-template-columns: 1fr 1fr auto;
+    gap: 1.5rem;
+    align-items: end;
+  }
+  @media (max-width: 700px) {
+    .combined-card { grid-template-columns: 1fr; }
+  }
+  .grand-total {
+    text-align: right;
+  }
+  .grand-total .amount {
+    font-size: 1.7rem;
+    font-weight: 700;
+  }
+  .grand-total .per-candidate {
+    font-size: 0.8rem;
+    color: var(--muted);
   }
   footer {
     margin-top: 3rem;
@@ -147,7 +177,7 @@
 <div class="wrap">
 
   <h1>Embedding Cost Calculator</h1>
-  <p class="subtitle">Estimate embedding-generation cost across every current OpenAI, AWS Bedrock, and Google Gemini text-embedding model.</p>
+  <p class="subtitle">Estimate the full candidate data pipeline cost: preprocessing/summarization (LLM completion) followed by embedding, across every current OpenAI, Cerebras, AWS Bedrock, and Google Gemini model.</p>
 
   <div class="card">
     <div class="inputs">
@@ -156,7 +186,11 @@
         <input type="number" id="candidates" value="20000000" min="0" step="1">
       </div>
       <div>
-        <label for="tokens">Average tokens per candidate</label>
+        <label for="rawTokens">Avg raw tokens per candidate (before summarization)</label>
+        <input type="number" id="rawTokens" value="1500" min="0" step="1">
+      </div>
+      <div>
+        <label for="tokens">Avg summarized tokens per candidate (preprocessing output = embedding input)</label>
         <input type="number" id="tokens" value="300" min="0" step="1">
       </div>
     </div>
@@ -165,12 +199,31 @@
       <label for="useBatch" style="margin:0;font-weight:500;">Use batch/async pricing where available (typically ~50% cheaper, non-realtime)</label>
     </div>
     <div class="total-tokens">
-      Total tokens: <strong id="totalTokens">0</strong>
+      Total raw tokens: <strong id="totalRawTokens">0</strong>
+      &nbsp;|&nbsp; Total summarized/embedded tokens: <strong id="totalTokens">0</strong>
       &nbsp;|&nbsp; Total characters (est., 4 chars/token): <strong id="totalChars">0</strong>
     </div>
   </div>
 
-  <h2>Estimated cost by model</h2>
+  <h2><span class="step-label">Step 1</span><br>Preprocessing / summarization cost</h2>
+  <div class="card table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Model</th>
+          <th>Provider</th>
+          <th>Input rate</th>
+          <th>Output rate</th>
+          <th>Estimated cost</th>
+          <th>Cost / candidate</th>
+        </tr>
+      </thead>
+      <tbody id="completionBody"></tbody>
+    </table>
+  </div>
+  <p class="note">Cost = candidates × (raw tokens × input rate + summarized tokens × output rate). ★ marks the cheapest current (non-preview, non-EOL) model. This step takes messy raw candidate fields (title, work history, education, skills, etc.) and produces the clean labeled summary that gets embedded in Step 2.</p>
+
+  <h2><span class="step-label">Step 2</span><br>Embedding cost</h2>
   <div class="card table-scroll">
     <table>
       <thead>
@@ -185,9 +238,44 @@
       <tbody id="resultsBody"></tbody>
     </table>
   </div>
-  <p class="note">Sorted cheapest first. ★ marks the lowest-cost current (non-legacy, non-EOL) model. Character-billed models (Vertex text-embedding-005 / text-multilingual-embedding-002) convert your token count to characters using a 4 chars/token estimate — treat their cost as approximate, not exact.</p>
+  <p class="note">Sorted cheapest first. ★ marks the lowest-cost current (non-legacy, non-EOL) model. Character-billed models (Vertex text-embedding-005 / text-multilingual-embedding-002) convert your summarized-token count to characters using a 4 chars/token estimate — treat their cost as approximate, not exact.</p>
 
-  <h2>Reference pricing table</h2>
+  <h2>Combined total (preprocessing + embedding)</h2>
+  <div class="card combined-card">
+    <div>
+      <label for="pickCompletion">Preprocessing model</label>
+      <select id="pickCompletion"></select>
+    </div>
+    <div>
+      <label for="pickEmbedding">Embedding model</label>
+      <select id="pickEmbedding"></select>
+    </div>
+    <div class="grand-total">
+      <div class="amount" id="grandTotal">$0</div>
+      <div class="per-candidate" id="grandTotalPerCandidate">$0 / candidate</div>
+    </div>
+  </div>
+
+  <h2>Reference: preprocessing / completion models</h2>
+  <div class="card table-scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Provider</th>
+          <th>Model</th>
+          <th>Input price</th>
+          <th>Output price</th>
+          <th>Batch (in/out)</th>
+          <th>Context</th>
+          <th>Status</th>
+        </tr>
+      </thead>
+      <tbody id="completionReferenceBody"></tbody>
+    </table>
+  </div>
+  <p class="note">Prices verified against official provider documentation as of <strong>2026-07-22</strong>, cross-checked via aggregators where a model's official page didn't render a plain table (flagged per-row where that applies). Cerebras also offers flat-rate "Cerebras Code" subscriptions ($50–200/mo for a fixed daily token budget) as an alternative to per-token pricing — not modeled here since it isn't pure pay-as-you-go. Llama/Qwen models on Cerebras moved to reserved-capacity Dedicated Endpoints (contact-sales, no public per-token rate) and are excluded.</p>
+
+  <h2>Reference: embedding models</h2>
   <div class="card table-scroll">
     <table>
       <thead>
@@ -204,10 +292,11 @@
       <tbody id="referenceBody"></tbody>
     </table>
   </div>
-  <p class="note">Prices verified against official provider documentation as of <strong>2026-07-22</strong>. Providers change embedding pricing without much notice and expose no live pricing API — re-verify before using these numbers for budget commitments. Bedrock and Cohere-on-Bedrock publish no batch discount for embeddings. Vertex's <code>text-embedding-005</code> / <code>text-multilingual-embedding-002</code> bill per 1,000 characters, not tokens.</p>
+  <p class="note">Providers change embedding pricing without much notice and expose no live pricing API — re-verify before using these numbers for budget commitments. Bedrock and Cohere-on-Bedrock publish no batch discount for embeddings. Vertex's <code>text-embedding-005</code> / <code>text-multilingual-embedding-002</code> bill per 1,000 characters, not tokens.</p>
 
   <footer>
     Sources: <a href="https://platform.openai.com/docs/pricing" target="_blank" rel="noopener">OpenAI pricing</a> ·
+    <a href="https://inference-docs.cerebras.ai" target="_blank" rel="noopener">Cerebras docs</a> ·
     <a href="https://aws.amazon.com/bedrock/pricing/" target="_blank" rel="noopener">AWS Bedrock pricing</a> ·
     <a href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener">Gemini API pricing</a> ·
     <a href="https://ai.google.dev/gemini-api/docs/deprecations" target="_blank" rel="noopener">Gemini deprecations</a>
@@ -217,8 +306,10 @@
 </div>
 
 <script>
-// Prices verified 2026-07-22. Units: $ per 1,000,000 input tokens unless noted otherwise.
-const MODELS = [
+// Prices verified 2026-07-22. Embedding units: $ per 1,000,000 input tokens unless noted otherwise.
+// Completion units: $ per 1,000,000 tokens, input and output priced separately.
+
+const EMBEDDING_MODELS = [
   { provider: "OpenAI", model: "text-embedding-3-small", standard: 0.02, batch: 0.01, unit: "token",
     maxInput: "8,192 tokens", dims: "1536 (configurable to 256)", status: "current" },
   { provider: "OpenAI", model: "text-embedding-3-large", standard: 0.13, batch: 0.065, unit: "token",
@@ -247,24 +338,43 @@ const MODELS = [
     maxInput: "2,048 tokens", dims: "768 (fixed)", status: "current" },
 ];
 
+const COMPLETION_MODELS = [
+  { provider: "OpenAI", model: "GPT-4.1-nano", input: 0.10, output: 0.40, batchInput: 0.05, batchOutput: 0.20,
+    context: "1.05M in / 32K out", status: "current", note: "cheapest OpenAI option; legacy naming, still API-active" },
+  { provider: "OpenAI", model: "GPT-5.4-nano", input: 0.20, output: 1.25, batchInput: 0.10, batchOutput: 0.625,
+    context: "not published", status: "current" },
+  { provider: "OpenAI", model: "GPT-5.6 Luna", input: 1.00, output: 6.00, batchInput: 0.50, batchOutput: 3.00,
+    context: "~1.05M in / 128K out", status: "current", note: "current default cheap-tier name (GA 2026-07-09) — pricier than legacy nano models" },
+
+  { provider: "Cerebras", model: "GPT-OSS-120B", input: 0.35, output: 0.75, batchInput: null, batchOutput: null,
+    context: "131K in / 40K out", status: "current", note: "only self-serve pay-as-you-go Cerebras model; no batch discount published" },
+  { provider: "Cerebras", model: "Gemma 4 31B", input: 0.99, output: 1.49, batchInput: null, batchOutput: null,
+    context: "131K in / 40K out", status: "preview" },
+  { provider: "Cerebras", model: "Z.ai GLM-4.7", input: 2.25, output: 2.75, batchInput: null, batchOutput: null,
+    context: "131K in / 40K out", status: "preview", note: "frontier-tier, not cost-optimized for bulk summarization" },
+
+  { provider: "Bedrock", model: "Amazon Nova Micro", input: 0.035, output: 0.14, batchInput: null, batchOutput: null,
+    context: "128K in / 5K out", status: "current", note: "aggregator-sourced (official page is JS-rendered) — re-verify; batch discount not confirmed" },
+  { provider: "Bedrock", model: "Amazon Nova Lite", input: 0.06, output: 0.24, batchInput: null, batchOutput: null,
+    context: "300K in / 8K out", status: "current", note: "aggregator-sourced — re-verify; batch discount not confirmed" },
+  { provider: "Bedrock", model: "Claude Haiku 4.5", input: 1.00, output: 5.00, batchInput: 0.50, batchOutput: 2.50,
+    context: "200K in / 64K out", status: "current", note: "EOL no sooner than 2026-10-01" },
+
+  { provider: "Gemini", model: "Gemini 3.5 Flash-Lite", input: 0.30, output: 2.50, batchInput: 0.15, batchOutput: 1.25,
+    context: "~1M", status: "current", note: "launched 2026-07-21" },
+  { provider: "Gemini", model: "Gemini 3.6 Flash", input: 1.50, output: 7.50, batchInput: 0.75, batchOutput: 3.75,
+    context: "~1M", status: "current", note: "launched 2026-07-21, replaces 3.5 Flash" },
+];
+
 const CHARS_PER_TOKEN = 4;
 const fmtMoney = n => n.toLocaleString("en-US", { style: "currency", currency: "USD", maximumFractionDigits: n < 1 ? 4 : 2 });
 const fmtInt = n => Math.round(n).toLocaleString("en-US");
 
-const statusLabel = { current: "Current", legacy: "Legacy", eol: "EOL (retired)" };
-const statusClass = { current: "status-current", legacy: "status-legacy", eol: "status-eol" };
+const statusLabel = { current: "Current", legacy: "Legacy", preview: "Preview", eol: "EOL (retired)" };
+const statusClass = { current: "status-current", legacy: "status-legacy", preview: "status-preview", eol: "status-eol" };
 
-function render() {
-  const candidates = Math.max(0, Number(document.getElementById("candidates").value) || 0);
-  const avgTokens = Math.max(0, Number(document.getElementById("tokens").value) || 0);
-  const useBatch = document.getElementById("useBatch").checked;
-
-  const totalTokens = candidates * avgTokens;
-  const totalChars = totalTokens * CHARS_PER_TOKEN;
-  document.getElementById("totalTokens").textContent = fmtInt(totalTokens);
-  document.getElementById("totalChars").textContent = fmtInt(totalChars);
-
-  const rows = MODELS.map(m => {
+function computeEmbeddingRows(totalTokens, totalChars, candidates, useBatch) {
+  return EMBEDDING_MODELS.map(m => {
     const rate = (useBatch && m.batch != null) ? m.batch : m.standard;
     const rateIsBatch = useBatch && m.batch != null;
     const units = m.unit === "char" ? totalChars : totalTokens;
@@ -272,12 +382,55 @@ function render() {
     const perCandidate = candidates > 0 ? cost / candidates : 0;
     return { ...m, rate, rateIsBatch, cost, perCandidate };
   }).sort((a, b) => a.cost - b.cost);
+}
 
-  const cheapestCurrentCost = Math.min(...rows.filter(r => r.status === "current").map(r => r.cost));
+function computeCompletionRows(totalRawTokens, totalSummarizedTokens, candidates, useBatch) {
+  return COMPLETION_MODELS.map(m => {
+    const useB = useBatch && m.batchInput != null && m.batchOutput != null;
+    const inRate = useB ? m.batchInput : m.input;
+    const outRate = useB ? m.batchOutput : m.output;
+    const cost = (totalRawTokens / 1_000_000) * inRate + (totalSummarizedTokens / 1_000_000) * outRate;
+    const perCandidate = candidates > 0 ? cost / candidates : 0;
+    return { ...m, inRate, outRate, rateIsBatch: useB, cost, perCandidate };
+  }).sort((a, b) => a.cost - b.cost);
+}
 
-  const resultsBody = document.getElementById("resultsBody");
-  resultsBody.innerHTML = rows.map(r => `
-    <tr class="${r.status === 'current' && r.cost === cheapestCurrentCost ? 'cheapest' : ''}">
+function populateSelect(selectEl, rows, statusField) {
+  const prevValue = selectEl.value;
+  selectEl.innerHTML = rows.map((r, i) => `<option value="${i}">${r.model} (${r.provider}) — ${fmtMoney(r.cost)}</option>`).join("");
+  if (prevValue && Number(prevValue) < rows.length) {
+    selectEl.value = prevValue;
+  } else {
+    let cheapestIdx = 0;
+    let cheapestCost = Infinity;
+    rows.forEach((r, i) => {
+      if (r.status === "current" && r.cost < cheapestCost) { cheapestCost = r.cost; cheapestIdx = i; }
+    });
+    selectEl.value = cheapestIdx;
+  }
+}
+
+function render() {
+  const candidates = Math.max(0, Number(document.getElementById("candidates").value) || 0);
+  const avgRawTokens = Math.max(0, Number(document.getElementById("rawTokens").value) || 0);
+  const avgTokens = Math.max(0, Number(document.getElementById("tokens").value) || 0);
+  const useBatch = document.getElementById("useBatch").checked;
+
+  const totalRawTokens = candidates * avgRawTokens;
+  const totalTokens = candidates * avgTokens;
+  const totalChars = totalTokens * CHARS_PER_TOKEN;
+  document.getElementById("totalRawTokens").textContent = fmtInt(totalRawTokens);
+  document.getElementById("totalTokens").textContent = fmtInt(totalTokens);
+  document.getElementById("totalChars").textContent = fmtInt(totalChars);
+
+  const embeddingRows = computeEmbeddingRows(totalTokens, totalChars, candidates, useBatch);
+  const completionRows = computeCompletionRows(totalRawTokens, totalTokens, candidates, useBatch);
+
+  const cheapestEmbeddingCost = Math.min(...embeddingRows.filter(r => r.status === "current").map(r => r.cost));
+  const cheapestCompletionCost = Math.min(...completionRows.filter(r => r.status === "current").map(r => r.cost));
+
+  document.getElementById("resultsBody").innerHTML = embeddingRows.map(r => `
+    <tr class="${r.status === 'current' && r.cost === cheapestEmbeddingCost ? 'cheapest' : ''}">
       <td>${r.model}<br><span class="${statusClass[r.status]}">${statusLabel[r.status]}</span></td>
       <td><span class="provider-badge">${r.provider}</span></td>
       <td>${fmtMoney(r.rate)}/1M ${r.unit === 'char' ? 'chars' : 'tokens'}${r.rateIsBatch ? ' (batch)' : ''}</td>
@@ -286,8 +439,18 @@ function render() {
     </tr>
   `).join("");
 
-  const referenceBody = document.getElementById("referenceBody");
-  referenceBody.innerHTML = MODELS.map(m => `
+  document.getElementById("completionBody").innerHTML = completionRows.map(r => `
+    <tr class="${r.status === 'current' && r.cost === cheapestCompletionCost ? 'cheapest' : ''}">
+      <td>${r.model}<br><span class="${statusClass[r.status]}">${statusLabel[r.status]}</span></td>
+      <td><span class="provider-badge">${r.provider}</span></td>
+      <td>${fmtMoney(r.inRate)}/1M${r.rateIsBatch ? ' (batch)' : ''}</td>
+      <td>${fmtMoney(r.outRate)}/1M${r.rateIsBatch ? ' (batch)' : ''}</td>
+      <td>${fmtMoney(r.cost)}</td>
+      <td>${fmtMoney(r.perCandidate)}</td>
+    </tr>
+  `).join("");
+
+  document.getElementById("referenceBody").innerHTML = EMBEDDING_MODELS.map(m => `
     <tr>
       <td><span class="provider-badge">${m.provider}</span></td>
       <td>${m.model}</td>
@@ -298,11 +461,35 @@ function render() {
       <td><span class="${statusClass[m.status]}">${statusLabel[m.status]}</span></td>
     </tr>
   `).join("");
+
+  document.getElementById("completionReferenceBody").innerHTML = COMPLETION_MODELS.map(m => `
+    <tr>
+      <td><span class="provider-badge">${m.provider}</span></td>
+      <td>${m.model}${m.note ? `<br><span class="note" style="margin:0;">${m.note}</span>` : ''}</td>
+      <td>${fmtMoney(m.input)}/1M</td>
+      <td>${fmtMoney(m.output)}/1M</td>
+      <td>${m.batchInput != null ? `${fmtMoney(m.batchInput)} / ${fmtMoney(m.batchOutput)}` : '—'}</td>
+      <td>${m.context}</td>
+      <td><span class="${statusClass[m.status]}">${statusLabel[m.status]}</span></td>
+    </tr>
+  `).join("");
+
+  populateSelect(document.getElementById("pickCompletion"), completionRows);
+  populateSelect(document.getElementById("pickEmbedding"), embeddingRows);
+
+  const pickedCompletion = completionRows[Number(document.getElementById("pickCompletion").value)];
+  const pickedEmbedding = embeddingRows[Number(document.getElementById("pickEmbedding").value)];
+  const grandTotal = (pickedCompletion?.cost || 0) + (pickedEmbedding?.cost || 0);
+  const grandTotalPerCandidate = candidates > 0 ? grandTotal / candidates : 0;
+  document.getElementById("grandTotal").textContent = fmtMoney(grandTotal);
+  document.getElementById("grandTotalPerCandidate").textContent = `${fmtMoney(grandTotalPerCandidate)} / candidate`;
 }
 
-document.getElementById("candidates").addEventListener("input", render);
-document.getElementById("tokens").addEventListener("input", render);
+["candidates", "rawTokens", "tokens"].forEach(id =>
+  document.getElementById(id).addEventListener("input", render));
 document.getElementById("useBatch").addEventListener("change", render);
+document.getElementById("pickCompletion").addEventListener("change", render);
+document.getElementById("pickEmbedding").addEventListener("change", render);
 render();
 </script>
 
